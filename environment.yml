@@ -1,0 +1,20 @@
+name: PySpgm
+channels:
+   - conda-forge
+   - anaconda
+   - pytorch
+dependencies:
+   - python>=3.7
+   - numpy
+   - scipy
+   - pandas
+   - pyparsing
+   - statsmodels
+   - pytorch
+   - tqdm
+   - joblib
+   - pip
+   - pip:
+     - pgmpy
+ 
+
