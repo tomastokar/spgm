@@ -5,31 +5,25 @@ class CPDTable:
     def __init__(self, variable, values, evidence = []):
         self.variable = variable
         self.evidence = evidence
+        self.k = 1 + len(evidence)
         self.values = np.array(values)
-        self.legend = self._get_legend()
-        
-    def _get_legend(self):
-        values = (True, False)
-        legend = itertools.product(*(values for _ in self.evidence))
-        legend = np.array(legend)
-        return legend
+        self.values = self.values.reshape([2] * self.k)
     
     def _normalize(self):
         self.values /= self.values.sum(axis = 0)
     
     def marginalize(self, variable):        
         i = self.evidence.index(variable)
-        l = self.legend[:,i]
-        values = self.values[:, l] + self.values[:,~l]
+        values = self.values.sum(axis = i + 1)
         evidence = [e for e in self.evidence if e != variable]
         cpd_table = CPDTable(self.variable, values, evidence)
         return cpd_table
 
-    def reduce(self, variable, value):             
+    def reduce(self, variable, value):           
         i = self.evidence.index(variable)
         l = self.legend[:,i]
         idx = np.where(l == value)[0]
-        values = self.values[:,idx]
+        values = self.values[:,i + ]
         evidence = [e for e in self.evidence if e != variable]
         cpd_table = CPDTable(self.variable, values, evidence)
         return cpd_table
