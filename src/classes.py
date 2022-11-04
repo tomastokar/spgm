@@ -142,19 +142,29 @@ class QRunner:
     def __init__(self, model):
         self.model = model
     
+    def calc_minfill_cost(self, edges, node):
+        degree = len([edge for edge in edges in node in edges])
+        return degree * (degree - 1) / 2
+            
     def resolve_order(self, variables):
-        sorter = lambda k : (
-            self.model.in_degree[k], 
-            self.model.out_degree[k]
-        )        
-        variables = sorted(variables, key=sorter)
-        print('Variables to eliminate in order: {}'.format(', '.join(variables)))
-        return variables    
+        if len(variables) > 1:         
+            edges = self.model.edges
+            ordering = []   
+            while variables:
+                scores = {v : self.calc_minfill_cost(edges, v) for v in variables}        
+                pick = min(scores, key = scores.get())
+                ordering.append(pick)
+                variables.remove(pick)
+                edges = [edge for edge in edges if pick not in edge]
+                
+        else:
+            ordering = variables
+        print('Variables to eliminate in order: {}'.format(', '.join(ordering)))        
+        return ordering
     
     def eliminate_variables(self, variables):
-        # Resolve order of elimination
-        if len(variables) > 1:
-            variables = self.resolve_order(variables)                    
+        # Resolve order of elimination        
+        variables = self.resolve_order(variables)                    
         # Variable elimination
         model = self.model
         for variable in variables:
@@ -173,10 +183,8 @@ class QRunner:
         if evidence is not None:
             jpd_ = jpd.marginalize(variable)
             jpd_.values = 1. / jpd_.values
-            # jpd = multiply_pds(jpd, jpd_)
-            return jpd, jpd_
-        else:
-            return jpd
+            jpd = multiply_pds(jpd, jpd_)        
+        return jpd
                                     
     def run_query(self, variable, evidence = None):
         # Select variable to eliminate
