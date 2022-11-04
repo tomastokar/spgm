@@ -1,6 +1,6 @@
 
+import functools
 import numpy as np
-
 
 def multiply_pds(pd_1, pd_2):
     vals_1 = pd_1.values
@@ -13,6 +13,7 @@ def multiply_pds(pd_1, pd_2):
         vals_1,
         [var_dict[var] for var in vars_1],
         vals_2,
+        [var_dict[var] for var in vars_2],
         range(len(new_vars))
     )
     jpd_table = JPDTable(new_vars, new_vals)
@@ -68,26 +69,26 @@ class CPDTable(PDTable):
 
 class JPDTable(PDTable):
     def __init__(self, variables, values):
-        self.variables = variables
+        self.variables = list(set(variables))
         k = len(self.variables)
         self.values = np.array(values)
         self.values = self.values.reshape([2] * k)
-        self._normalize()
+        # self._normalize()
     
     def _normalize(self):
         self.values /= self.values.sum()
     
     def marginalize(self, variable):                
         values = super().marginalize(variable)
-        evidence = [e for e in self.evidence if e != variable]
-        cpd_table = CPDTable(self.target, values, evidence)
-        return cpd_table
+        variables = [e for e in self.variables if e != variable]
+        jpd_table = JPDTable(variables, values)
+        return jpd_table
 
     def reduce(self, variable, value):               
         values = super().reduce(variable, value)
-        evidence = [e for e in self.evidence if e != variable]
-        cpd_table = CPDTable(self.target, values, evidence)
-        return cpd_table    
+        variables = [e for e in self.variables if e != variable]
+        jpd_table = JPDTable(variables, values)
+        return jpd_table    
 
 
 class BNet:
@@ -148,50 +149,41 @@ class QRunner:
         )        
         variables = sorted(variables, key=sorter)
         print('Variables to eliminate in order: {}'.format(', '.join(variables)))
-        return variables
-        
-    def run_query(self, variable, evidence = None):
-        query_nodes = set([variable, evidence])
-        elim_nodes = [n for n in self.model.nodes if n not in query_nodes]
-        
+        return variables    
+    
+    def eliminate_variables(self, variables):
         # Resolve order of elimination
-        if len(elim_nodes) > 1:
-            elim_nodes = self.resolve_order(elim_nodes)
-            
+        if len(variables) > 1:
+            variables = self.resolve_order(variables)                    
         # Variable elimination
         model = self.model
-        for node in elim_nodes:
-            model = model.eliminate_variable(node)
-        
+        for variable in variables:
+            model = model.eliminate_variable(variable)        
+        return model
+    
+    def resolve_query(self, variable, evidence = None, model = None):
+        if model is None:
+            model = self.model
         # Calculate joint distribution
-        values = model.cpd_table[variable]
-        for node in evidence:            
-            cpd = model.cpd_tables[variable]
-               
-                    
-    # def eliminate_variable(self, variable, model = None):
-    #     factor = []
-    #     if model is None:
-    #         model = self.model
-    #     for cpd in model.cpd_tables:
-    #         if variable in cpd.variables:
-    #             factor.append(cpd)
-        
-        
-        
-        
-        
-        
-    # def elminate_variable(self, variable):
-        # cpds = []
-        # for cpd in self.cpd_tables:
-            # if variable in cpd.evidence:
-                    
-    # def eval_query(self, variable, evidence = []):
-    #     keep_nodes = set(variable).union(evidence)
-    #     elim_nodes = [node for node in self.nodes if node not in keep_nodes]
-        
-    #     if len(elim_nodes) > 0:
-    #         elimination_order = sorted(elim_nodes, key=self.in_degee.get)
-        
-        
+        jpd = functools.reduce(
+            lambda x, y: multiply_pds(x, y), 
+            list(model.cpd_tables.values())
+        )
+        # Marginalize on evidence variables                
+        if evidence is not None:
+            jpd_ = jpd.marginalize(variable)
+            jpd_.values = 1. / jpd_.values
+            # jpd = multiply_pds(jpd, jpd_)
+            return jpd, jpd_
+        else:
+            return jpd
+                                    
+    def run_query(self, variable, evidence = None):
+        # Select variable to eliminate
+        query_nodes = set([variable, evidence])
+        elim_nodes = [n for n in self.model.nodes if n not in query_nodes]        
+        # Eliminate variables
+        model = self.eliminate_variables(elim_nodes)            
+        # Resolve query
+        pd_table = self.resolve_query(variable, evidence, model)                
+        return pd_table
