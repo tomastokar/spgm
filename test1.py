@@ -1,7 +1,7 @@
 from src.classes import *
 
 p_ab = CPDTable(
-    target = 'A', 
+    target = ['A'], 
     values = [
         [.1, .7], 
         [.9, .3]
@@ -10,7 +10,7 @@ p_ab = CPDTable(
 )
 
 p_bc = CPDTable(
-    target = 'B', 
+    target = ['B'], 
     values = [
         [.6, .5], 
         [.4, .5]
@@ -19,7 +19,7 @@ p_bc = CPDTable(
 )
 
 p_c  = CPDTable(
-    target = 'C', 
+    target = ['C'], 
     values = [
         [.2], [.8]
     ]

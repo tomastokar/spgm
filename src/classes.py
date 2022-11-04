@@ -2,93 +2,49 @@
 import functools
 import numpy as np
 
-def multiply_pds(pd_1, pd_2):
-    vals_1 = pd_1.values
-    vals_2 = pd_2.values
-    vars_1 = pd_1.variables
-    vars_2 = pd_2.variables
-    new_vars = set(vars_1 + vars_2)
-    var_dict = {var : i for i, var in enumerate(new_vars)}
-    new_vals = np.einsum(
-        vals_1,
-        [var_dict[var] for var in vars_1],
-        vals_2,
-        [var_dict[var] for var in vars_2],
-        range(len(new_vars))
-    )
-    jpd_table = JPDTable(new_vars, new_vals)
-    return jpd_table
     
-
-class PDTable:
-    def reduce(self, variable, value):           
-        i = self.variables.index(variable)        
-        values = np.take(self.values, value, i)
-        return values
-
-    def marginalize(self, variable):        
-        i = self.variables.index(variable)
-        values = self.values.sum(axis = i)
-        return values
-    
-
-class CPDTable(PDTable):
+class CPDTable():
     def __init__(self, target, values, evidence = []):
         self.target = target
         self.evidence = evidence
-        self.variables = [target] + evidence
-        k = len(self.variables)
-        self.values = np.array(values).reshape([2] * k)
-        # self._normalize()
-    
-    def _normalize(self):
-        self.values /= self.values.sum(axis = 0)
-    
-    def marginalize(self, variable):                
-        values = super().marginalize(variable)
-        evidence = [e for e in self.evidence if e != variable]
-        cpd_table = CPDTable(self.target, values, evidence)
-        return cpd_table
-
-    def reduce(self, variable, value):               
-        values = super().reduce(variable, value)
-        evidence = [e for e in self.evidence if e != variable]
-        cpd_table = CPDTable(self.target, values, evidence)
-        return cpd_table
-    
-    def eliminate_evidence(self, cpd_table):
-        var = cpd_table.target
-        val = cpd_table.values
-        i = self.evidence.index(var) + 1
-        values = np.tensordot(self.values, val, axes = (i, 0))        
-        evidence = [e for e in self.evidence if e != var]
-        evidence += cpd_table.evidence
-        cpd_table = CPDTable(self.target, values, evidence)
-        return cpd_table
-
-
-class JPDTable(PDTable):
-    def __init__(self, variables, values):
-        self.variables = list(set(variables))
-        k = len(self.variables)
+        self.variables = target + evidence
         self.values = np.array(values)
-        self.values = self.values.reshape([2] * k)
-        # self._normalize()
-    
-    def _normalize(self):
-        self.values /= self.values.sum()
+        self.values.shape = ([2] * len(self.variables))
     
     def marginalize(self, variable):                
-        values = super().marginalize(variable)
-        variables = [e for e in self.variables if e != variable]
-        jpd_table = JPDTable(variables, values)
-        return jpd_table
+        i = self.variables.index(variable)
+        values = self.values.sum(axis = i)
+        target = [t for t in self.target if t != variable]
+        evidence = [v for v in self.evidence if v != variable]
+        cpd_table = CPDTable(target, values, evidence)
+        return cpd_table
 
     def reduce(self, variable, value):               
-        values = super().reduce(variable, value)
-        variables = [e for e in self.variables if e != variable]
-        jpd_table = JPDTable(variables, values)
-        return jpd_table    
+        i = self.variables.index(variable)        
+        values = np.take(self.values, value, i)
+        target = [t for t in self.target if t != variable]
+        evidence = [v for v in self.evidence if v != variable]
+        cpd_table = CPDTable(target, values, evidence)
+        return cpd_table
+    
+    def multiply(self, cpd_table):
+        target = set(self.target + cpd_table.target)
+        evidence = set(self.evidence + cpd_table.evidence) - target     
+        var_dict = {}
+        for i, var in enumerate(target):
+            var_dict[var] = i
+        for j, var in enumerate(evidence):
+            var_dict[var] = j + len(target)                
+        new_vals = np.einsum(
+            self.values,
+            [var_dict[var] for var in self.variables],
+            cpd_table.values,
+            [var_dict[var] for var in cpd_table.variables],
+            range(len(var_dict))
+        )
+        cpd_table = CPDTable(list(target), new_vals, list(evidence))
+        return cpd_table
+
 
 
 class BNet:
@@ -107,7 +63,8 @@ class BNet:
         return in_degree, out_degree
     
     def add_cpd(self, cpd_table):
-        self.cpd_tables[cpd_table.target] = cpd_table
+        assert len(cpd_table.target) == 1
+        self.cpd_tables[cpd_table.target[0]] = cpd_table
         
     def reroute_edges(self, variable):
         edges = []
@@ -121,19 +78,19 @@ class BNet:
                 edges.append(edge)                   
         if len(fr) > 0:
             edges += [[n,m] for n in fr for m in to]
-
         return edges                     
         
     def eliminate_variable(self, variable):        
         edges = self.reroute_edges(variable)
         model = BNet(edges)        
 
-        cpd_variable = self.cpd_tables[variable]
+        cpd_table = self.cpd_tables[variable]
         for k, cpd in self.cpd_tables.items():
             if variable in cpd.evidence:
-                cpd_ = cpd.eliminate_evidence(cpd_variable)
-                model.add_cpd(cpd_)
-            elif variable != k:
+                cpd = cpd.multiply(cpd_table)
+                cpd = cpd.marginalize(variable)
+                model.add_cpd(cpd)
+            elif k != variable:
                 model.add_cpd(cpd)        
         return model
                 
@@ -143,22 +100,22 @@ class QRunner:
         self.model = model
     
     def calc_minfill_cost(self, edges, node):
-        degree = len([edge for edge in edges in node in edges])
+        degree = len([edge for edge in edges if node in edge])
         return degree * (degree - 1) / 2
             
     def resolve_order(self, variables):
         if len(variables) > 1:         
-            edges = self.model.edges
+            edges = self.model.edges            
             ordering = []   
             while variables:
-                scores = {v : self.calc_minfill_cost(edges, v) for v in variables}        
-                pick = min(scores, key = scores.get())
-                ordering.append(pick)
+                scores = {v : self.calc_minfill_cost(edges, v) for v in variables}                     
+                pick = min(scores, key = scores.get)
+                ordering.append(pick)  
                 variables.remove(pick)
                 edges = [edge for edge in edges if pick not in edge]
-                
+                         
         else:
-            ordering = variables
+            ordering = variables            
         print('Variables to eliminate in order: {}'.format(', '.join(ordering)))        
         return ordering
     
@@ -171,20 +128,18 @@ class QRunner:
             model = model.eliminate_variable(variable)        
         return model
     
-    def resolve_query(self, variable, evidence = None, model = None):
-        if model is None:
-            model = self.model
+    def resolve_query(self, model, variable, evidence = None):
         # Calculate joint distribution
-        jpd = functools.reduce(
-            lambda x, y: multiply_pds(x, y), 
+        cpd = functools.reduce(
+            lambda x, y: x.multiply(y), 
             list(model.cpd_tables.values())
         )
-        # Marginalize on evidence variables                
+        # Marginalize on variables
         if evidence is not None:
-            jpd_ = jpd.marginalize(variable)
-            jpd_.values = 1. / jpd_.values
-            jpd = multiply_pds(jpd, jpd_)        
-        return jpd
+            cpd_ = cpd.marginalize(variable)
+            cpd_.values = 1. / cpd_.values
+            # cpd = cpd.multiply(cpd_)        
+        return cpd, cpd_
                                     
     def run_query(self, variable, evidence = None):
         # Select variable to eliminate
@@ -193,5 +148,5 @@ class QRunner:
         # Eliminate variables
         model = self.eliminate_variables(elim_nodes)            
         # Resolve query
-        pd_table = self.resolve_query(variable, evidence, model)                
-        return pd_table
+        cpd_tables = self.resolve_query(model, variable, evidence)                
+        return cpd_tables
