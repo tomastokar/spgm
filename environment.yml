@@ -13,6 +13,7 @@ dependencies:
    - pytorch
    - tqdm
    - joblib
+   - jupyterlab
    - pip
    - pip:
      - pgmpy
