@@ -11,21 +11,23 @@ class CPDTable():
         self.values = np.array(values)
         self.values.shape = ([2] * len(self.variables))
     
-    def marginalize(self, variable):                
-        i = self.variables.index(variable)
-        values = self.values.sum(axis = i)
-        target = [t for t in self.target if t != variable]
-        evidence = [v for v in self.evidence if v != variable]
-        cpd_table = CPDTable(target, values, evidence)
+    def marginalize(self, variables):                
+        cpd_table = self.copy()
+        for var in variables:        
+            i = cpd_table.variables.index(var)
+            values = cpd_table.values.sum(axis = i)
+            target = [t for t in cpd_table.target if t != var]
+            evidence = [v for v in cpd_table.evidence if v != var]
+            cpd_table = CPDTable(target, values, evidence)
         return cpd_table
 
-    def reduce(self, variable, value):               
-        i = self.variables.index(variable)        
-        values = np.take(self.values, value, i)
-        target = [t for t in self.target if t != variable]
-        evidence = [v for v in self.evidence if v != variable]
-        cpd_table = CPDTable(target, values, evidence)
-        return cpd_table
+    # def reduce(self, variables):
+    #     values = self.values
+    #     for var, val in variables.items():
+    #         i = self.variables.index(var)        
+    #         values = np.take(values, val, i)
+    #         cpd_table = CPDTable(self.target, values, self.evidence)
+    #     return cpd_table
     
     def multiply(self, cpd_table):
         target = set(self.target + cpd_table.target)
@@ -44,7 +46,9 @@ class CPDTable():
         )
         cpd_table = CPDTable(list(target), new_vals, list(evidence))
         return cpd_table
-
+    
+    def copy(self):
+        return CPDTable(self.target, self.values, self.evidence)
 
 
 class BNet:
@@ -88,12 +92,13 @@ class BNet:
         for k, cpd in self.cpd_tables.items():
             if variable in cpd.evidence:
                 cpd = cpd.multiply(cpd_table)
-                cpd = cpd.marginalize(variable)
+                cpd = cpd.marginalize([variable])
                 model.add_cpd(cpd)
             elif k != variable:
                 model.add_cpd(cpd)        
         return model
                 
+ 
         
 class QRunner:
     def __init__(self, model):
@@ -128,25 +133,25 @@ class QRunner:
             model = model.eliminate_variable(variable)        
         return model
     
-    def resolve_query(self, model, variable, evidence = None):
+    def resolve_query(self, model, variables, evidence = []):
         # Calculate joint distribution
         cpd = functools.reduce(
             lambda x, y: x.multiply(y), 
             list(model.cpd_tables.values())
         )
         # Marginalize on variables
-        if evidence is not None:
-            cpd_ = cpd.marginalize(variable)
+        if evidence:
+            cpd_ = cpd.marginalize(variables)
             cpd_.values = 1. / cpd_.values
-            # cpd = cpd.multiply(cpd_)        
-        return cpd, cpd_
+            cpd = cpd.multiply(cpd_) 
+        return cpd
                                     
-    def run_query(self, variable, evidence = None):
+    def run_query(self, variables, evidence = []):
         # Select variable to eliminate
-        query_nodes = set([variable, evidence])
+        query_nodes = set(variables).union(evidence)
         elim_nodes = [n for n in self.model.nodes if n not in query_nodes]        
         # Eliminate variables
         model = self.eliminate_variables(elim_nodes)            
         # Resolve query
-        cpd_tables = self.resolve_query(model, variable, evidence)                
+        cpd_tables = self.resolve_query(model, variables, evidence)       
         return cpd_tables
