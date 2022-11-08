@@ -137,7 +137,7 @@ class QRunner:
         # Calculate joint distribution
         cpd = functools.reduce(
             lambda x, y: x.multiply(y), 
-            list(model.cpd_tables.values())
+            model.cpd_tables
         )
         # Marginalize on variables
         if evidence:
