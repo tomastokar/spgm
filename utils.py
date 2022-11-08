@@ -54,21 +54,11 @@ class CPDTable():
 class BNet:
     def __init__(self, edges):
         self.edges = edges
-        self.nodes = set([node for edge in edges for node in edge])
-        self.in_degree, self.out_degree = self._get_degree()
-        self.cpd_tables = {}
-        
-    def _get_degree(self):
-        in_degree = {n : 0 for n in self.nodes}
-        out_degree = {n : 0 for n in self.nodes}
-        for edge in self.edges:
-            in_degree[edge[0]] += 1
-            out_degree[edge[1]] += 1
-        return in_degree, out_degree
+        self.nodes = set([node for edge in edges for node in edge])        
+        self.cpd_tables = []
     
-    def add_cpd(self, cpd_table):
-        assert len(cpd_table.target) == 1
-        self.cpd_tables[cpd_table.target[0]] = cpd_table
+    def add_cpd(self, cpd_table):        
+        self.cpd_tables.append(cpd_table)
         
     def reroute_edges(self, variable):
         edges = []
@@ -82,24 +72,34 @@ class BNet:
                 edges.append(edge)                   
         if len(fr) > 0:
             edges += [[n,m] for n in fr for m in to]
-        return edges                     
-        
+        return edges   
+    
+    def create_factor(self, variable):
+        # Select cpds containing the variable
+        cpd_list = [cpd for cpd in self.cpd_tables if variable in cpd.variables]
+        # Calculate new cpd table
+        cpd = functools.reduce(
+            lambda x, y: x.multiply(y), 
+            cpd_list
+        )
+        # Marginalize across variable
+        cpd = cpd.marginalize([variable])
+        return cpd        
+                          
     def eliminate_variable(self, variable):        
-        edges = self.reroute_edges(variable)
-        model = BNet(edges)        
-
-        cpd_table = self.cpd_tables[variable]
-        for k, cpd in self.cpd_tables.items():
-            if variable in cpd.evidence:
-                cpd = cpd.multiply(cpd_table)
-                cpd = cpd.marginalize([variable])
+        # Get new edges
+        edges = self.reroute_edges(variable)                                
+        # Create new model
+        model = BNet(edges)
+        # Transfer cpds to new model
+        for cpd in self.cpd_tables:
+            if variable not in cpd.variables:
                 model.add_cpd(cpd)
-            elif k != variable:
-                model.add_cpd(cpd)        
+        # Create a new factor and add to the model
+        model.add_cpd(self.create_factor(variable))
         return model
-                
- 
-        
+           
+                        
 class QRunner:
     def __init__(self, model):
         self.model = model
@@ -133,7 +133,7 @@ class QRunner:
             model = model.eliminate_variable(variable)        
         return model
     
-    def resolve_query(self, model, variables, evidence = []):
+    def finalize_query(self, model, variables, evidence = []):
         # Calculate joint distribution
         cpd = functools.reduce(
             lambda x, y: x.multiply(y), 
@@ -147,11 +147,12 @@ class QRunner:
         return cpd
                                     
     def run_query(self, variables, evidence = []):
-        # Select variable to eliminate
+        # Query variables
         query_nodes = set(variables).union(evidence)
+        # Select variable to eliminate        
         elim_nodes = [n for n in self.model.nodes if n not in query_nodes]        
         # Eliminate variables
         model = self.eliminate_variables(elim_nodes)            
         # Resolve query
-        cpd_tables = self.resolve_query(model, variables, evidence)       
+        cpd_tables = self.finalize_query(model, variables, evidence)       
         return cpd_tables
