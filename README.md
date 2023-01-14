@@ -1,6 +1,8 @@
 # spgm
 Simple Probabilistic Graphical Models
 
+## Description
+
 An extremely rudimentary toolbox for PGMs, containing two solvers: variable elimination and Gbbs sampling. Currently only supports binary variables, which may in future be extended to non-binary discrete variables.
 
 ## Dependencies
