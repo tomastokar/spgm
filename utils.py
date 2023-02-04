@@ -26,11 +26,11 @@ class CPDTable():
     def reduce(self, state):
         cpd = self.copy()
         for var, val in state.items():
-            assert var in cpd.evidence                
-            i = cpd.variables.index(var)
-            values = np.take(cpd.values, val, i)            
-            evidence = [v for v in cpd.evidence if v != var]
-            cpd = CPDTable(cpd.target, values, evidence)
+            if var in cpd.evidence:
+                i = cpd.variables.index(var)
+                values = np.take(cpd.values, val, i)            
+                evidence = [v for v in cpd.evidence if v != var]
+                cpd = CPDTable(cpd.target, values, evidence)
         return cpd
     
     def reorder(self, target, evidence):        
@@ -76,6 +76,16 @@ class CPDTable():
         )
         cpd = CPDTable(list(target), values, list(evidence))
         return cpd
+        
+    def select(self, state):
+        variables = self.variables
+        values = self.values
+        for var, val in state.items():
+            if var in variables:
+                i = variables.index(var)
+                values = np.take(values, val, i)            
+                variables = [v for v in variables if v != var]                
+        return values, variables        
         
     def copy(self):
         return CPDTable(self.target, self.values, self.evidence)
@@ -214,94 +224,147 @@ class MyVariableElimination:
     
 
 class MyGibbsSampler:
-    def __init__(self, model, thinning = 100, burn_in = 1e+3, conf_level = 0.95):
+    def __init__(self, model, no_iters = 1e+6, thinning = 100, burn_in = 1e+3, conf_level = 0.95):
         self.model = model
-        self.trans_probs = self.get_trans_probs()
+        self.burn_in = burn_in        
+        self.no_iters = no_iters
         self.thinning = thinning
-        self.burn_in = burn_in
-        self.conf_level = conf_level
-        
-    def calc_trans_probs(self, node):        
-        # Select cpd of the node
-        cpds = [cpd for cpd in self.model.cpd_tables if node in cpd.target]
-        
-        # Add  pds associated with the node's children                 
-        children = self.model.children[node]
-        for ch in children:
-            cpds += [cpd for cpd in self.model.cpd_tables if ch in cpd.target]  
-            
-        # Calculate joint distribution                            
-        joint_proba = functools.reduce(lambda x, y: x.multiply(y), cpds)            
-        
-        # Select variables to condition on
-        evidence = [t for t in joint_proba.target if t != node]
-        
-        # Convert joint to conditional
-        trans_probs = joint_proba.recondition(evidence)
-        
-        return trans_probs
+        self.conf_level = conf_level       
+        self.get_kernels()          
 
-    def get_trans_probs(self):
-        trans_probs = {}
-        for node in self.model.nodes:
-            trans_probs[node] = self.calc_trans_probs(node)            
-        return trans_probs
+    # def reduce_cpds(self, evidence):
+    #     # Reduce cpds given the evidence
+    #     cpds = [cpd.reduce(evidence) for cpd in self.model.cpd_tables]
         
+    #     # Ged rid of cpds of the evidence variables
+    #     for e in evidence.keys():
+    #         cpds = [cpd for cpd in cpds if e not in cpd.target]
+        
+    #     return cpds
+
+    # def get_trans_probas(self, evidence):
+
+    #     # Calculate transition probabilities
+    #     trans_probas = {}
+    #     for node in self.model.nodes:            
+    #         if node not in evidence.keys():
+    #             # Select cpd of the node
+    #             cpds = [cpd for cpd in self.model.cpd_tables if node in cpd.target]
+                
+    #             # Add cpds associated with the node's children                 
+    #             children = self.model.children[node]
+    #             for ch in children:
+    #                 cpds += [cpd for cpd in self.model.cpd_tables if ch in cpd.target]  
+                
+    #             # Calculate joint distribution                            
+    #             joint_proba = functools.reduce(lambda x, y: x.multiply(y), cpds)            
+                
+    #             # Select variables to condition on
+    #             condition_vars = [t for t in joint_proba.target if t != node]
+                
+    #             # Convert joint to conditional
+    #             trans_probas[node] = joint_proba.recondition(condition_vars)
+                                
+    #     return trans_probas
+    
+    def get_kernels(self):
+        self.kernels = {}
+        for n in self.model.nodes:
+            self.kernels[n] = [cpd for cpd in self.model.cpd_tables if n in cpd.target]
+            for ch in self.model.children[n]:
+                self.kernels[n] += [cpd for cpd in self.model.cpd_tables if ch in cpd.target]
+                
+    def calc_trans_proba(self, var):
+        # Reduce current state to non-var variables
+        state = {v : s for v, s in self.state.items() if v != var}
+                
+        # Take cpds from variable kernel
+        cpds = self.kernels[var]
+        
+        # Select probas given the state
+        log_probas = []
+        for cpd in cpds:            
+            p, vars = cpd.select(state)
+            p = p.flatten()
+            log_probas.append(np.log(p))
+            # print(var, vars, p, np.log(p))
+        
+        # Calculate joint proba
+        joint_proba = functools.reduce(lambda x, y: x + y, log_probas)
+        # print(joint_proba)
+        
+        joint_proba = np.exp(joint_proba)
+        # print(joint_proba)
+                            
+        # Normalize joint proba 
+        trans_proba = joint_proba / joint_proba.sum()
+        
+        # print(trans_proba)
+        
+        return trans_proba
+
     def sample_state(self, proba):        
-        k = range(len(proba))
+        k = range(len(proba))        
         s = np.random.choice(k, p = proba)        
         return s
     
-    def get_init_state(self, evidence):
-        state = {}
+    def initialize(self):
+        self.state = {}
         for n in self.model.nodes:            
-            if n in evidence.keys():
-                state[n] = evidence[n]
+            if n in self.evidence.keys():
+                self.state[n] = self.evidence[n]
             else:
-                state[n] = self.sample_state([.5, .5])
-        return state
-        
-    def update_state(self, state, free_vars):
-        # Select variable to update
-        var = np.random.choice(free_vars)  
-        # Select transition probabilities      
-        tp = self.trans_probs[var]
-        # Select evidence
-        state_evidence = {v : state[v] for v in tp.evidence}
-        # Calculate probabilities
-        p = tp.reduce(state_evidence)
-        # Sample variable state
-        state[var] = self.sample_state(p.values)
-        return state   
+                self.state[n] = self.sample_state([.5, .5])
+            
+    def update_variable(self, var):
+        tp = self.calc_trans_proba(var)
+        self.state[var] = self.sample_state(tp)
+                
+    def update_state(self):        
+        for v in self.state.keys():
+            if v not in self.evidence:
+                self.update_variable(v)
+                     
+    def record_state(self):
+        # Add variable states to observations
+        for v in self.variables:
+            self.observations[v].append(self.state[v])
                  
-    def gibbs_sampling(self, variables, evidence, no_iters = 1e+4):  
-        # Init state
-        state = self.get_init_state(evidence)
-        # Select free vairables 
-        free_vars = [n for n in state if n not in evidence.keys()]    
+    def gibbs_sampling(self):          
         # Init container for observations
-        observations = defaultdict(list)        
-        # Run burnin
-        for i in range(int(self.burn_in)):
-            state = self.update_state(state, free_vars)
+        self.observations = defaultdict(list)                
+        # Init state
+        self.initialize()                       
+        # Run burn-in
+        for _ in range(int(self.burn_in)):
+            self.update_state()            
         # Run markov chain        
-        for i in range(int(no_iters)):
-            state = self.update_state(state, free_vars)
+        for i in range(int(self.no_iters)):
+            self.update_state()                        
             # Record state
             if i % self.thinning == 0: 
-                for v in variables:
-                    observations[v].append(state[v])           
-        return observations
+                self.record_state()
+    
+    def run_query(self, variables, evidence = {}):
+        self.variables = variables
+        self.evidence = evidence
+        self.gibbs_sampling()
 
-    def calc_stats(self, observations):        
+    def calc_stats(self, max_obs):        
+        # Reduce observations to max observations
+        # to be used to calculate statistics
+        # (this is useful to demonstrate convergence)
+        observations = {var : x[:max_obs] for var, x in self.observations.items()}
+            
         stats = {}
         for n, x in observations.items():
             mu = np.mean(x)
             ci = self.conf_level * np.std(x) / np.sqrt(len(x))
             stats[n] = [mu, ci]
         return stats
-    
-    def run_query(self, variables, evidence, no_iters = 1e+4):
-        observations = self.gibbs_sampling(variables, evidence, no_iters)
-        stats = self.calc_stats(observations)         
-        return stats
+        
+    def get_results(self, max_obs = None):
+        if max_obs is None:
+            max_obs = len(self.observations)
+        self.stats = self.calc_stats(max_obs)         
+        return self.stats
