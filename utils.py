@@ -304,9 +304,9 @@ class MyGibbsSampler:
         return trans_proba
 
     def sample_state(self, proba):        
-        k = range(len(proba))        
-        s = np.random.choice(k, p = proba)        
-        return s
+        r = np.random.rand()
+        w = np.cumsum(proba)
+        return np.searchsorted(w, r, side='right')
     
     def initialize(self):
         self.state = {}
@@ -314,13 +314,15 @@ class MyGibbsSampler:
             if n in self.evidence.keys():
                 self.state[n] = self.evidence[n]
             else:
-                self.state[n] = self.sample_state([.5, .5])
+                self.state[n] = self.sample_state([0.5])
             
     def update_variable(self, var):
-        tp = self.calc_trans_proba(var)
-        self.state[var] = self.sample_state(tp)
+        # Update state of the variable
+        p = self.calc_trans_proba(var)
+        self.state[var] = self.sample_state(p)
                 
-    def update_state(self):        
+    def update_state(self):    
+        # Update current state    
         for v in self.state.keys():
             if v not in self.evidence:
                 self.update_variable(v)
